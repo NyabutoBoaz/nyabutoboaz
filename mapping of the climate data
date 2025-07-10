@@ -1,0 +1,107 @@
+import xarray as xr
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib.colors import LinearSegmentedColormap
+
+
+def kelvin_to_celsius(data):
+    return data - 273.15
+
+
+def get_lat_lon_names(dims):
+    for lat_name in ['lat', 'latitude', 'y']:
+        if lat_name in dims:
+            break
+    else:
+        lat_name = None
+
+    for lon_name in ['lon', 'longitude', 'x']:
+        if lon_name in dims:
+            break
+    else:
+        lon_name = None
+
+    return lat_name, lon_name
+
+
+def preprocess_variable(data, method='mean'):
+    """
+    Reduce data to 2D by slicing or averaging over extra dimensions.
+    :param data: xarray DataArray
+    :param method: 'mean' or 'slice'
+    """
+    if method not in ['mean', 'slice']:
+        raise ValueError("Method must be 'mean' or 'slice'")
+
+    # Handle known dimensions
+    for dim in data.dims:
+        if dim in ['time', 'level', 'depth', 'pressure', 'z', 'plev']:
+            data = data.isel({dim: 0}) if method == 'slice' else data.mean(dim)
+
+    # Handle any remaining extra dimensions
+    lat, lon = get_lat_lon_names(data.dims)
+    extra_dims = [d for d in data.dims if d not in [lat, lon]]
+    for dim in extra_dims:
+        data = data.isel({dim: 0}) if method == 'slice' else data.mean(dim)
+
+    return data
+
+
+def create_climate_colormap():
+    colors = ['#08306b', '#2171b5', '#6baed6', '#c6dbef', '#ffffff',
+              '#fcbba1', '#fc9272', '#de2d26', '#a50f15']
+    return LinearSegmentedColormap.from_list('climate_strip', colors, N=256)
+
+
+def plot_temperature_map(data, title='Temperature Map', cmap='RdBu_r', projection=ccrs.PlateCarree()):
+    lat, lon = get_lat_lon_names(data.dims)
+
+    fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': projection})
+    im = ax.contourf(data[lon], data[lat], data,
+                     transform=ccrs.PlateCarree(), levels=20, cmap=cmap)
+
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.BORDERS)
+    ax.add_feature(cfeature.OCEAN, color='lightblue')
+    ax.add_feature(cfeature.LAND, color='lightgray')
+    ax.set_title(title)
+    ax.set_global()
+
+    plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, shrink=0.7, label='Temperature (°C)')
+    plt.tight_layout()
+    plt.show()
+
+
+def explore_netcdf(filename):
+    ds = xr.open_dataset(filename)
+    print("NetCDF Info:")
+    print(ds)
+    return ds
+
+
+def process_and_plot_temperature(path, var_name='t2m', method='mean', cmap='RdBu_r'):
+    ds = explore_netcdf(path)
+
+    # Convert temperature to Celsius if needed
+    data = ds[var_name]
+    if data.attrs.get('units', '').lower().startswith('k') or data.max() > 200:
+        print("Converting from Kelvin to Celsius...")
+        data = kelvin_to_celsius(data)
+
+    if 'time' in data.dims:
+        selected_time = data['time'].isel(time=-1).values
+        print(f"Selected time: {selected_time}")
+        data = data.isel(time=-1)
+
+    # Add processed version to dataset for reusability
+    ds['temperature'] = data
+
+    # Reduce dimensions
+    data_2d = preprocess_variable(data, method=method)
+
+    # Plot
+    plot_temperature_map(data_2d, cmap=cmap)
+
+file_path = "26ee2a2c970ed95ea574b81493f21062.nc"
+process_and_plot_temperature(file_path, var_name='t2m', method='mean', cmap=create_climate_colormap())
